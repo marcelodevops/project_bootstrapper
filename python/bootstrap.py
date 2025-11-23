@@ -1,80 +1,109 @@
 #!/usr/bin/env python3
 """
-Project Bootstrapper
---------------------
-This tool creates a GitHub repository and generates boilerplate project
-resources based on input parameters.
+Project Bootstrapper CLI (Step 1: Convert to pip-installable package)
+--------------------------------------------------------------------
+This version restructures the tool as a proper Python package ready
+for packaging and installation via pip.
 
-Requirements:
-- Python 3
-- PyGithub (`pip install PyGithub`)
-- A GitHub Personal Access Token with `repo` permissions set in env var GITHUB_TOKEN
+Features included:
+- Typer-based CLI
+- Commands: init (create repo + scaffold)
+- Package-ready layout
 
-Usage:
-    python bootstrap.py --name myproject --description "My new tool" \
-        --private true --with-readme true --with-license mit
+Next steps will add templates, org support, issues, etc.
 """
 
 import os
-import argparse
+from pathlib import Path
+import typer
 from github import Github
 
+app = typer.Typer()
+
 LICENSES = {
-    "mit": "MIT License\n\nCopyright (c) 2025 YOUR NAME\n...",
-    "apache2": "Apache License 2.0\n...",
-    "gpl3": "GPLv3\n...",
+    "mit": "MIT License Copyright (c) 2025 YOUR NAME...",
+    "apache2": "Apache License 2.0...",
+    "gpl3": "GPLv3...",
 }
 
-def create_github_repo(name, description, private):
+def get_github(org: str | None = None):
     token = os.getenv("GITHUB_TOKEN")
     if not token:
         raise Exception("Environment variable GITHUB_TOKEN not set.")
 
     gh = Github(token)
-    user = gh.get_user()
-    repo = user.create_repo(
-        name=name,
-        description=description,
-        private=private
-    )
-    return repo
+    if org:
+        return gh.get_organization(org)
+    return gh.get_user()
 
-def add_file(repo, path, content, message="Add file"):
+
+def add_file(repo, path: str, content: str, message: str = "Add file"):
     repo.create_file(path, message, content)
 
-def main():
-    parser = argparse.ArgumentParser(description="Bootstrap a GitHub project.")
-    parser.add_argument("--name", required=True, help="Repository name")
-    parser.add_argument("--description", default="", help="Description for repo")
-    parser.add_argument("--private", default="true", help="Private repo? true/false")
-    parser.add_argument("--with-readme", default="true")
-    parser.add_argument("--with-license", default="none", help="License: mit, apache2, gpl3, none")
 
-    args = parser.parse_args()
-    is_private = args.private.lower() == "true"
+@app.command()
+def init(
+    name: str = typer.Option(..., help="Repository name"),
+    description: str = typer.Option("", help="Repo description"),
+    private: bool = typer.Option(True, help="Make repo private"),
+    org: str | None = typer.Option(None, help="GitHub org name"),
+    readme: bool = typer.Option(True, help="Include README.md"),
+    license: str = typer.Option("none", help="License type: mit/apache2/gpl3/none"),
+):
+    """Create a GitHub project and scaffold it."""
 
-    print(f"Creating GitHub repo '{args.name}'...")
-    repo = create_github_repo(args.name, args.description, is_private)
-    print(f"Repo created: {repo.clone_url}")
+    owner = get_github(org)
+    repo = owner.create_repo(name=name, description=description, private=private)
+    typer.echo(f"Repo created: {repo.clone_url}")
 
-    if args.with_readme.lower() == "true":
-        readme = f"# {args.name}\n\n{args.description}\n"
-        add_file(repo, "README.md", readme)
-        print("README.md added.")
+    if readme:
+        add_file(repo, "README.md", f"# {name} {description}")
+        typer.echo("README.md added.")
 
-    if args.with_license.lower() != "none":
-        license_key = args.with_license.lower()
-        content = LICENSES.get(license_key)
+    if license != "none":
+        content = LICENSES.get(license)
         if content:
             add_file(repo, "LICENSE", content)
-            print("LICENSE added.")
+            typer.echo("LICENSE added.")
         else:
-            print(f"Unknown license '{license_key}'. Skipping.")
+            typer.echo(f"Unknown license '{license}'. Skipping.")
 
-    # Basic project structure
-    add_file(repo, ".gitignore", "*.pyc\n__pycache__/\n.env\n")
-    add_file(repo, "src/main.py", "print('Hello from your new project!')\n")
-    print("Basic structure created.")
+    # Project structure
+    add_file(repo, ".gitignore", "*.pyc__pycache__/.env")
+    add_file(repo, "src/main.py", "print('Hello from your new project!')")
+
+    # Dockerfile
+    dockerfile = """
+FROM python:3.11-slim
+WORKDIR /app
+COPY . .
+RUN pip install -r requirements.txt || true
+CMD [\"python\", \"src/main.py\"]
+"""
+    add_file(repo, "Dockerfile", dockerfile)
+
+    # GitHub CI
+    ci_yaml = """
+name: CI
+on: [push]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt || true
+      - run: python src/main.py
+"""
+    add_file(repo, ".github/workflows/ci.yml", ci_yaml)
+
+    # Microservice example
+    add_file(repo, "services/example_service/main.py", "print('Example microservice running')")
+
+    typer.echo("Project scaffold complete.")
+
 
 if __name__ == "__main__":
-    main()
+    app()
